@@ -1,0 +1,82 @@
+G2P Shrinks Speech Models
+Community Article - Published February 5, 2025
+Hexgrad's avatar - Hexgrad
+
+Graphemes are the units of a writing system (i.e. letters, for English). Phonemes are the distinct units of sound.
+G2P is the problem of converting graphemes to phonemes, often in a many-to-many, language-specific way. One string of graphemes could match multiple strings of phonemes:
+
+Can you reread that for me: reread => /ɹiɹˈid/ (re-REED)
+Yeah, I reread it for you: reread => /ɹiɹˈɛd/ (re-RED)
+Let's give it another reread: reread => /ɹˈiɹid/ (RE-reed)
+And multiple strings of graphemes could match the same string of phonemes, like cereal, serial and ate, eight.
+
+For the purposes of this discussion: text models generate text, image models generate images, video models generate videos, and audio models generate audio. Speech models are a subtype of audio models:
+
+generative_models/
+├── text/
+│   ├── GPT
+│   └── ...
+├── image/
+├── video/
+├── ...
+└── audio/
+    ├── speech/
+    │   ├── Kokoro-82M
+    │   └── ...
+    ├── music/
+    ├── sfx/
+    └── ...
+
+G2P Compression Hypothesis
+Hypothesis: G2P input preprocessing enables compression of speech models, for both model and dataset sizes. In other words, if you do G2P on the input before you pass text to your TTS model, you should be able to achieve a comparable Elo rating with fewer parameters and less data. The latter is a corollary, since it is well known that larger models are more data-hungry.
+
+This understanding is based on my own empirical observations and experience—I don't have ablation tables to show you. It is also likely not a novel observation, and to many researchers it may be obvious.
+
+The lower the entropy of your data, the smaller your model can be while still achieving some target performance. Even a tiny digit classifier can get 99% performance on MNIST. A similarly performing cat vs dog image classifier—where the cats and dogs can be facing any direction—will need to be much larger.
+
+Using phonemes instead of raw text as input substantially lowers the input entropy of the TTS problem.
+
+Heavyweights: Billions of params
+Speech models that do the end-to-end journey of graphemes in, audio out implicitly dedicate a portion of their parameters to G2P. Often such models predict latent audio tokens from learned codebooks, have a relatively large parameter count and commensurate training datasets.
+
+Parakeet
+
+For example, Parakeet described in mid-2024 by Darefsky et al trains "a 3B parameter encoder-decoder transformer model" on "a ~100,000 hour dataset of audio-transcription pairs" and consequently exhibits exceptional naturalness, along with the ability to laugh, cough, etc. Parakeet predicts latent tokens "conditioned on raw text" and thus does not involve explicit G2P preprocessing. Two asides:
+
+In machine learning, you get what you pay for, and a model's parameter count is (in many ways) its price.
+Since Parakeet was trained on podcasts, some of its samples sound similar in nature to NotebookLM. This is pure speculation, but it would not surprise me if NotebookLM uses a similar transformer+codebooks approach, although I assume at a smaller size for cost effectiveness. Neither Parakeet nor NotebookLM would be the first to use such an approach.
+Llasa
+
+Llasa is a text-to-speech (TTS) system that extends the text-based LLaMA (1B,3B, and 8B) language model by incorporating speech tokens from the XCodec2 codebook, which contains 65,536 tokens. Llasa was trained on a dataset comprising 250,000 hours of Chinese-English speech data. The model is capable of generating speech either solely from input text or by utilizing a given speech prompt.
+
+https://huggingface.co/HKUST-Audio/Llasa-3B
+
+Compared to those 65k tokens in XCodec2's codebook, you might only have on the order of dozens of phonemes after G2P preprocessing.
+
+Featherweights: Millions of params
+So if transformers can solve G2P neurally in the model, why bother with G2P preprocessing on the input? As stated in the hypothesis: model compression.
+
+If Parakeet (3B) represents the heavyweight class of TTS models, Piper is in the featherweight class. A Piper model sits between 5M to 32M params, uses a VITS architecture, and takes espeak-ng phonemes as input to rapidly generate speech, albeit at the relatively low quality you would expect from such a small model. The parameter counts of Parakeet and Piper models are separated by 2-3 OOMs, or 100-1000x.
+
+G2P Flavors: Lookup, Rules, and Neural
+G2P is among the factors that enable (potentially lossy) compression from heavyweight to featherweight speech models. Notable G2P categories include:
+
+Pronunciation dictionaries like CMUdict are simple but brittle. If your dictionary is perfect and pronunciation is context-independent, any dictionary hit should be golden, but a dictionary miss or context-dependent pronunciation demands a more sophisticated G2P solution.
+espeak-ng is a rule-based G2P engine whose README states: "Compact size. The program and its data, including many languages, totals about few Mbytes." Rule-based G2P is still fast, but can fail due to insufficient rule coverage (e.g. missing regex for currency or time), or when there are exceptions to the rules (rare/foreign words).
+Neural G2P should in theory generalize far better than either of the above, but usually costs more compute to run, and like other transformer-with-softmax applications, could hallucinate in opaque ways.
+I am currently rolling a hybrid G2P solution named Misaki which starts with lookup tables and some very basic rules for English. OOD words fall back to a configurable dealer's choice, which might be a rules-based system like espeak-ng, or a neural seq2seq model. In select situations, like English homographs axes bass bow lead tear, the G2P should be escalated up to neural nets (still a TODO). The hope is that such a hybrid solution achieves a good balance of speed and performance, while also being flexible and interpretable. Under this regime, G2P failures are less inexplicable hallucinations of some black box, and more "it just wasn't in the dictionary."
+
+G2P is not a free lunch
+Like the infamous strawberry tokenization blindspot, if you do explicit G2P preprocessing, then any upstream G2P nuances and errors will have negative downstream impacts that your speech model may be unable to recover from. Also, unless you can find an effective G2P scheme for things like laughs/coughs/sighs, or side-channel another way of modeling these sounds (diffusion, probably), it is unlikely a pure G2P-based speech model can pull these off as expressively and effectively as an end-to-end speech model.
+
+If your G2P is neural, you have to add the time and compute cost of that neural G2P in front of your speech model, which adds latency.
+
+And thus far, I have found G2P to be a per-language endeavor. Having a G2P engine for English does not automatically mean you can G2P Chinese as well.
+
+Footnote
+This post lacks some of the rigor you'd see in an academic paper, but it is grounded in experience. Its entirely possible that the G2P hypothesis will fall to the bitter lesson. And even if it doesn't, improved hardware and new architectures could mean that if people can run today's B-param speech models on tomorrow's mobile phones at near zero latency, then eventually no one will practically care about M-param speech models, in the same way no one practically cares about K-param LMs beyond education.
+
+But "eventually" isn't here yet. I suspect M-param speech models should remain relevant for at least the near future.
+
+This article is one potential answer to the question "How is Kokoro TTS so good with so few parameters?"
+
